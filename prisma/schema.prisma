@@ -7,12 +7,95 @@ generator client {
   output   = "../src/generated/prisma"
 }
 
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  LAWYER
+  COLLABORATOR
+  READ_ONLY
+}
+
+enum Jurisdiction {
+  SANTA_FE
+  FEDERAL
+  OTHER
+}
+
+enum CaseStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+  ARCHIVED
+}
+
+enum PartyRole {
+  CLIENT
+  DEFENDANT
+  VICTIM
+  COMPLAINANT
+  WITNESS
+  EXPERT
+  OTHER
+}
+
+enum ContactType {
+  PERSON
+  ORGANIZATION
+}
+
+enum AssignmentRole {
+  RESPONSIBLE_LAWYER
+  CO_COUNSEL
+  ASSISTANT
+}
+
+enum CustodyStatus {
+  DETAINED
+  HOUSE_ARREST
+  RELEASED
+}
+
+enum EventType {
+  HEARING
+  DEADLINE
+  TASK
+  FILING
+  MEETING
+  OTHER
+}
+
+enum EventStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum ResourceType {
+  DRIVE_FOLDER
+  DOCUMENT
+  EXTERNAL_LINK
+}
+
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
+  fullName  String?
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  otps      Otp[]
+
+  otps            Otp[]
+  memberships     Membership[]
+  createdCases    LegalCase[]        @relation("CaseCreatedBy")
+  updatedCases    LegalCase[]        @relation("CaseUpdatedBy")
+  caseAssignments CaseAssignment[]
+  createdEvents   CaseEvent[]        @relation("EventCreatedBy")
+  assignedEvents  CaseEvent[]        @relation("EventAssignedTo")
+  completedEvents CaseEvent[]        @relation("EventCompletedBy")
+  notes           CaseNote[]
+  resources       CaseResource[]
+  stageChanges    CaseStageHistory[]
+  auditLogs       AuditLog[]
 }
 
 model Otp {
@@ -25,4 +108,319 @@ model Otp {
 
   @@index([userId, expiresAt])
   @@index([expiresAt])
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  timezone  String   @default("America/Argentina/Buenos_Aires")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships         Membership[]
+  cases               LegalCase[]
+  contacts            Contact[]
+  judicialOffices     JudicialOffice[]
+  detentionFacilities DetentionFacility[]
+  notes               CaseNote[]
+  resources           CaseResource[]
+  auditLogs           AuditLog[]
+}
+
+model Membership {
+  id          String        @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(LAWYER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model LegalCase {
+  id             String       @id @default(uuid())
+  workspaceId    String
+  title          String
+  description    String?
+  jurisdiction   Jurisdiction @default(SANTA_FE)
+  procedureCode  String?
+  status         CaseStatus   @default(ACTIVE)
+  priority       Int          @default(0)
+  currentStageId String?
+  openedAt       DateTime?
+  closedAt       DateTime?
+  archivedAt     DateTime?
+  createdById    String
+  updatedById    String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  workspace      Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  currentStage   ProceduralStage?   @relation("CurrentCaseStage", fields: [currentStageId], references: [id], onDelete: SetNull)
+  createdBy      User               @relation("CaseCreatedBy", fields: [createdById], references: [id])
+  updatedBy      User               @relation("CaseUpdatedBy", fields: [updatedById], references: [id])
+  identifiers    CaseIdentifier[]
+  parties        CaseParty[]
+  offenses       CaseOffense[]
+  assignments    CaseAssignment[]
+  stageHistory   CaseStageHistory[]
+  custodyRecords CustodyRecord[]
+  events         CaseEvent[]
+  notes          CaseNote[]
+  resources      CaseResource[]
+
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, currentStageId])
+}
+
+model CaseIdentifier {
+  id        String    @id @default(uuid())
+  caseId    String
+  type      String
+  number    String
+  isPrimary Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  case      LegalCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, type, number])
+  @@index([type, number])
+}
+
+model Contact {
+  id             String          @id @default(uuid())
+  workspaceId    String
+  type           ContactType     @default(PERSON)
+  firstName      String?
+  lastName       String?
+  displayName    String
+  documentType   String?
+  documentNumber String?
+  email          String?
+  phone          String?
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  caseParties    CaseParty[]
+  custodyRecords CustodyRecord[]
+
+  @@index([workspaceId, displayName])
+  @@index([workspaceId, documentNumber])
+}
+
+model CaseParty {
+  id        String    @id @default(uuid())
+  caseId    String
+  contactId String
+  role      PartyRole
+  isPrimary Boolean   @default(false)
+  notes     String?
+  createdAt DateTime  @default(now())
+  case      LegalCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, contactId, role])
+  @@index([caseId, role])
+}
+
+model CaseAssignment {
+  id        String         @id @default(uuid())
+  caseId    String
+  userId    String
+  role      AssignmentRole
+  createdAt DateTime       @default(now())
+  case      LegalCase      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, userId, role])
+  @@index([userId])
+}
+
+model OffenseCategory {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  sortOrder Int       @default(0)
+  offenses  Offense[]
+}
+
+model Offense {
+  id             String          @id @default(uuid())
+  categoryId     String
+  name           String
+  legalReference String
+  lawNumber      String?
+  article        String?
+  active         Boolean         @default(true)
+  category       OffenseCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  cases          CaseOffense[]
+
+  @@unique([categoryId, name, legalReference])
+  @@index([name])
+  @@index([legalReference])
+}
+
+model CaseOffense {
+  id             String    @id @default(uuid())
+  caseId         String
+  offenseId      String
+  isPrimary      Boolean   @default(false)
+  classification String?
+  notes          String?
+  case           LegalCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  offense        Offense   @relation(fields: [offenseId], references: [id])
+
+  @@unique([caseId, offenseId])
+  @@index([offenseId])
+}
+
+model ProceduralStage {
+  id            String             @id @default(uuid())
+  jurisdiction  Jurisdiction
+  procedureCode String?
+  name          String
+  category      String
+  sortOrder     Int                @default(0)
+  isFinal       Boolean            @default(false)
+  active        Boolean            @default(true)
+  currentCases  LegalCase[]        @relation("CurrentCaseStage")
+  history       CaseStageHistory[]
+
+  @@unique([jurisdiction, procedureCode, name])
+  @@index([jurisdiction, sortOrder])
+}
+
+model CaseStageHistory {
+  id          String          @id @default(uuid())
+  caseId      String
+  stageId     String
+  startedAt   DateTime        @default(now())
+  endedAt     DateTime?
+  notes       String?
+  changedById String
+  case        LegalCase       @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  stage       ProceduralStage @relation(fields: [stageId], references: [id])
+  changedBy   User            @relation(fields: [changedById], references: [id])
+
+  @@index([caseId, startedAt])
+}
+
+model JudicialOffice {
+  id           String       @id @default(uuid())
+  workspaceId  String
+  name         String
+  type         String
+  jurisdiction Jurisdiction
+  locality     String?
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+}
+
+model DetentionFacility {
+  id          String          @id @default(uuid())
+  workspaceId String
+  name        String
+  code        String?
+  system      String
+  province    String?
+  locality    String?
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  records     CustodyRecord[]
+
+  @@unique([workspaceId, name])
+}
+
+model CustodyRecord {
+  id         String             @id @default(uuid())
+  caseId     String
+  partyId    String?
+  status     CustodyStatus
+  facilityId String?
+  startedAt  DateTime           @default(now())
+  endedAt    DateTime?
+  notes      String?
+  case       LegalCase          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  party      Contact?           @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  facility   DetentionFacility? @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+
+  @@index([caseId, endedAt])
+}
+
+model CaseEvent {
+  id            String      @id @default(uuid())
+  caseId        String
+  type          EventType
+  title         String
+  description   String?
+  startsAt      DateTime
+  dueAt         DateTime?
+  status        EventStatus @default(PENDING)
+  priority      Int         @default(0)
+  assignedToId  String?
+  completedAt   DateTime?
+  completedById String?
+  createdById   String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  case          LegalCase   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  assignedTo    User?       @relation("EventAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  completedBy   User?       @relation("EventCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  createdBy     User        @relation("EventCreatedBy", fields: [createdById], references: [id])
+
+  @@index([caseId, status, startsAt])
+  @@index([status, startsAt])
+  @@index([assignedToId, status, startsAt])
+}
+
+model CaseNote {
+  id          String    @id @default(uuid())
+  workspaceId String
+  caseId      String
+  content     String
+  isPinned    Boolean   @default(false)
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  case        LegalCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation(fields: [createdById], references: [id])
+
+  @@index([caseId, createdAt])
+}
+
+model CaseResource {
+  id          String       @id @default(uuid())
+  workspaceId String
+  caseId      String
+  type        ResourceType
+  name        String
+  url         String
+  createdById String
+  createdAt   DateTime     @default(now())
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  case        LegalCase    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  createdBy   User         @relation(fields: [createdById], references: [id])
+
+  @@index([caseId, createdAt])
+}
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  workspaceId String
+  userId      String
+  action      String
+  entityType  String
+  entityId    String
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([workspaceId, entityType, entityId])
+  @@index([workspaceId, createdAt])
 }

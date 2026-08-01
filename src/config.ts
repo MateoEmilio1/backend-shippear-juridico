@@ -17,4 +17,9 @@ export const config = {
   otpExpirationMinutes: Number(process.env.OTP_EXPIRATION_MINUTES ?? 5),
   sessionDays: Number(process.env.AUTH_SESSION_DAYS ?? 7),
   nodeEnv: process.env.NODE_ENV ?? "development",
+  allowAnyEmail: process.env.ALLOW_ANY_EMAIL !== "false",
+  allowedEmails: (process.env.ALLOWED_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
 };
