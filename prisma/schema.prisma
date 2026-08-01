@@ -76,6 +76,14 @@ enum ResourceType {
   EXTERNAL_LINK
 }
 
+enum SisfeSyncStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+  NEEDS_LOGIN
+}
+
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
@@ -126,6 +134,9 @@ model Workspace {
   notes               CaseNote[]
   resources           CaseResource[]
   auditLogs           AuditLog[]
+  sisfeSessions       SisfeSession[]
+  sisfeExpedientes    ExpedienteTracked[]
+  sisfeSyncRuns       SisfeSyncRun[]
 }
 
 model Membership {
@@ -173,6 +184,7 @@ model LegalCase {
   events         CaseEvent[]
   notes          CaseNote[]
   resources      CaseResource[]
+  sisfeExpediente ExpedienteTracked?
 
   @@index([workspaceId, status, updatedAt])
   @@index([workspaceId, currentStageId])
@@ -426,23 +438,50 @@ model AuditLog {
 }
 
 model SisfeSession {
-  id           String   @id @default(uuid())
-  tokenCifrado String
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String    @id @default(uuid())
+  workspaceId     String
+  tokenCifrado    String
+  expiresAt       DateTime
+  lastValidatedAt DateTime?
+  invalidatedAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  @@index([expiresAt])
+  @@index([workspaceId, expiresAt])
 }
 
 model ExpedienteTracked {
-  id        String               @id @default(uuid())
-  sisfeId   BigInt               @unique
-  numero    String
-  caratula  String
-  createdAt DateTime             @default(now())
-  updatedAt DateTime             @updatedAt
-  snapshots ExpedienteSnapshot[]
+  id                 String               @id @default(uuid())
+  workspaceId        String
+  legalCaseId        String?              @unique
+  sisfeId            BigInt
+  cuij               String?
+  numero             String
+  caratula           String
+  fechaInicio        DateTime?
+  fechaActualizacion DateTime?
+  radicacion         String?
+  ubicacion          String?
+  localidad          String?
+  organismoCodigo    String?
+  visible            String?
+  digital            Boolean              @default(false)
+  rawSummary         Json
+  rawDetail          Json?
+  firstSeenAt        DateTime              @default(now())
+  lastSeenAt         DateTime              @default(now())
+  lastSyncedAt       DateTime              @default(now())
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  workspace          Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  legalCase          LegalCase?           @relation(fields: [legalCaseId], references: [id], onDelete: SetNull)
+  snapshots          ExpedienteSnapshot[]
+  movements          SisfeMovement[]
+
+  @@unique([workspaceId, sisfeId])
+  @@index([workspaceId, lastSeenAt])
+  @@index([workspaceId, cuij])
 }
 
 model ExpedienteSnapshot {
@@ -452,7 +491,43 @@ model ExpedienteSnapshot {
   ubicacion     String
   radicacion    String
   actualizadoEn DateTime
+  rawData       Json?
   createdAt     DateTime          @default(now())
 
   @@index([expedienteId, createdAt])
+}
+
+model SisfeMovement {
+  id           String            @id @default(uuid())
+  expedienteId String
+  fingerprint  String
+  sisfeId      String?
+  fecha        DateTime?
+  tipo         String?
+  descripcion  String?
+  rawData      Json
+  firstSeenAt  DateTime          @default(now())
+  lastSeenAt   DateTime          @default(now())
+  expediente   ExpedienteTracked @relation(fields: [expedienteId], references: [id], onDelete: Cascade)
+
+  @@unique([expedienteId, fingerprint])
+  @@index([expedienteId, fecha])
+}
+
+model SisfeSyncRun {
+  id                 String          @id @default(uuid())
+  workspaceId        String
+  status             SisfeSyncStatus @default(RUNNING)
+  jurisdiction       String          @default("ROSARIO")
+  startedAt          DateTime        @default(now())
+  finishedAt         DateTime?
+  foundCount         Int             @default(0)
+  syncedCount        Int             @default(0)
+  changedCount       Int             @default(0)
+  movementCount      Int             @default(0)
+  errorCount         Int             @default(0)
+  errorMessage       String?
+  workspace          Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, startedAt])
 }

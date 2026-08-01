@@ -22,4 +22,12 @@ export const config = {
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean),
+  sisfeSyncEnabled: process.env.SISFE_SYNC_ENABLED === "true",
+  sisfeSyncCron: process.env.SISFE_SYNC_CRON?.trim() || "0 7 * * *",
+  sisfeReminderCron: process.env.SISFE_REMINDER_CRON?.trim() || "55 6 * * *",
+  sisfeRetryAttempts: Math.max(0, Number(process.env.SISFE_RETRY_ATTEMPTS ?? 2)),
+  sisfeRetryDelayMinutes: Math.max(1, Number(process.env.SISFE_RETRY_DELAY_MINUTES ?? 10)),
+  sisfeWorkspaceSlug: process.env.SISFE_WORKSPACE_SLUG?.trim() || "antenucci-penal",
+  sisfeConnectSecret: process.env.SISFE_CONNECT_SECRET?.trim() || "",
+  sisfeAlertWebhookUrl: process.env.SISFE_ALERT_WEBHOOK_URL?.trim() || "",
 };
