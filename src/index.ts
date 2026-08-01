@@ -9,6 +9,7 @@ import { getCatalogs } from "./modules/catalogs.js";
 import { getDashboard } from "./modules/dashboard.js";
 import { archiveCase, createCase, createNote, createResource, getCase, listCases, updateCase } from "./modules/cases.js";
 import { createEvent, deleteEvent, listEvents, updateEvent } from "./modules/events.js";
+import { startSisfeScheduler } from "./modules/sisfe/scheduler.js";
 import { asyncHandler, HttpError } from "./utils/http.js";
 
 const app = express();
@@ -54,5 +55,7 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
   console.error(error);
   response.status(500).json({ error: "Error interno" });
 });
+
+startSisfeScheduler();
 
 app.listen(config.port, () => console.log(`API disponible en http://localhost:${config.port}`));

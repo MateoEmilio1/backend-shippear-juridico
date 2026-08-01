@@ -1,6 +1,7 @@
 node_modules
 dist
 .env
+.sisfe-session.json
 src/generated/prisma
 *.log
 .DS_Store

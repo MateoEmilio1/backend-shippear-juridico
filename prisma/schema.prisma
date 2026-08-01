@@ -424,3 +424,35 @@ model AuditLog {
   @@index([workspaceId, entityType, entityId])
   @@index([workspaceId, createdAt])
 }
+
+model SisfeSession {
+  id           String   @id @default(uuid())
+  tokenCifrado String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model ExpedienteTracked {
+  id        String               @id @default(uuid())
+  sisfeId   BigInt               @unique
+  numero    String
+  caratula  String
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  snapshots ExpedienteSnapshot[]
+}
+
+model ExpedienteSnapshot {
+  id            String            @id @default(uuid())
+  expedienteId  String
+  expediente    ExpedienteTracked @relation(fields: [expedienteId], references: [id], onDelete: Cascade)
+  ubicacion     String
+  radicacion    String
+  actualizadoEn DateTime
+  createdAt     DateTime          @default(now())
+
+  @@index([expedienteId, createdAt])
+}

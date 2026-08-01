@@ -40,30 +40,100 @@ Algoritmo `HS256` (firma simétrica — no la podemos generar nosotros sin el se
 
 Con 2hs de duración, el re-login manual (Fase 3) tiene que correr cada ~2hs si querés monitoreo continuo, o simplemente antes de cada tanda de consultas si el uso es más esporádico.
 
-### Fase 1 — Mapear los endpoints de negocio
-- [ ] Capturar el request completo (URL, headers, body) de `busquedaExpediente`.
-- [ ] Capturar el request completo de `consultaExpediente` / `findExpedienteDigitalById` (detalle).
-- [ ] Documentar ambos payloads (request y response) acá o en un archivo aparte.
+### Fase 1 — Mapear los endpoints de negocio ✅
+- [x] Capturar el request completo (URL, headers, body) de búsqueda.
+- [x] Capturar el request completo de detalle (`findById`).
+- [x] Documentar ambos payloads (request y response).
 
-### Fase 2 — Cliente HTTP (`sisfe-client`)
-- [ ] Crear `src/modules/sisfe/`.
-- [ ] Instalar `axios`.
-- [ ] Crear `src/modules/sisfe/sisfe.schemas.ts` con los tipos zod de login, búsqueda y detalle (basados en Fase 1).
-- [ ] Crear `src/modules/sisfe/sisfe.client.ts`: wrapper tipado sobre `{apiUrl}` que agrega el Bearer token a cada llamada.
+**Búsqueda de expedientes — confirmado:**
+```
+GET {apiUrl}/expedientes/findByFilter?page=1&size=25&diasNovedades=10
+Authorization: Bearer <token>
+Accept: application/json
+```
+Sin `matricula` en la URL — el backend la resuelve del claim `sub` del token (`matriculado:<id>`). Otros query params posibles (vistos en el bundle): `localidad`, `organismo`, `cuij`, `sufijo`, `numero`, `bis`, `caratula` — a confirmar cuando se use el formulario de filtros completo.
 
-### Fase 3 — Módulo de autenticación semi-manual (Playwright)
-- [ ] Script standalone (`scripts/sisfe-login.ts` o similar, fuera del flujo de request/response del server) que abre browser headed.
-- [ ] El humano completa matrícula/clave y resuelve el captcha.
-- [ ] El script intercepta la response de `/login`, extrae `token` y lo persiste cifrado (Fase 4).
+Response:
+```json
+{
+  "totalElements": null,
+  "lista": [
+    {
+      "id": 10067939116,
+      "expediente": "21-04258078-0(1390/2025)",
+      "expCaratula": "ACOSTA JOSE OCTAVIO C/ RUTA 40 E HIJOS SRL S/ COBRO DE PESOS - RUBROS LABORALES",
+      "expFechaInicio": "05/09/2025",
+      "fechaActualizacion": "31/07/2026",
+      "radicacionActual": "Juzg. 1ra. Inst. Laboral 8ª . Nom. - ROSARIO",
+      "expVisible": "S",
+      "expDigital": 1,
+      "expUbicacion": "EN CASILLERO. - desde el 31/07/2026 12:41"
+    }
+  ]
+}
+```
+`expUbicacion` es el campo que interesa para detectar movimiento (cambia de texto/fecha cuando el expediente se mueve) — candidato natural para el diff de `ExpedienteSnapshot` en la Fase 4.
 
-### Fase 4 — Persistencia (Prisma)
-- [ ] Modelo `SisfeSession` (token cifrado, expiración).
-- [ ] Modelo `ExpedienteTracked` (expedientes que se siguen).
-- [ ] Modelo `ExpedienteSnapshot` (último estado conocido, para diffear cambios).
+**Detalle de expediente — confirmado:**
+```
+GET {apiUrl}/expedientes/findById?idExpediente=<id>
+Authorization: Bearer <token>
+Accept: application/json
+```
+`<id>` es el `id` numérico que devuelve el endpoint de búsqueda (no el número de expediente con guiones).
 
-### Fase 5 — Scheduler
-- [ ] Cron job que recorre `ExpedienteTracked`, consulta vía `sisfe-client` con el token vigente.
-- [ ] Diff contra el último `ExpedienteSnapshot`; si hay cambios, genera evento/notificación.
+Response:
+```json
+{
+  "expCaratula": "ACOSTA JOSE OCTAVIO C/ RUTA 40 E HIJOS SRL S/ COBRO DE PESOS - RUBROS LABORALES",
+  "cuijSufijo": "21-04258078-0",
+  "numeroExpediente": "1390/2025",
+  "radicado": "Juzg. 1ra. Inst. Laboral 8ª . Nom. SEC.UNICA",
+  "localidad": "ROSARIO",
+  "fechaIngresoMEU": "05/09/2025",
+  "expUbicacion": "EN CASILLERO. - desde el 31/07/2026 12:41",
+  "ultimaActualizacionDelExpediente": "31/07/2026 13:32",
+  "fechaActualizacionSisfeOnline": "01/08/2026 12:15",
+  "organismoCodigo": "201037",
+  "expVisible": "S",
+  "expPrincipal": null,
+  "expAcumulado": null,
+  "cuijExpPrincipal": null,
+  "anio": "2025",
+  "expDigital": 1
+}
+```
+`ultimaActualizacionDelExpediente` es más preciso que `expUbicacion` para detectar cambios (tiene timestamp exacto) — mejor candidato todavía para el diff de la Fase 4.
+
+Con esto la Fase 1 queda cerrada: tenemos login, búsqueda y detalle mapeados end-to-end.
+
+### Fase 2 — Cliente HTTP (`sisfe-client`) ✅
+- [x] Crear `src/modules/sisfe/` (originalmente se creó como `src/sisfe/` porque el repo era flat; al mergear "version 1" apareció `src/modules/` con `cases.ts`, `catalogs.ts`, etc., así que se movió ahí para quedar consistente).
+- [x] Instalar `axios`.
+- [x] Crear `src/modules/sisfe/schemas.ts` con los tipos zod de login, búsqueda y detalle (basados en Fase 1).
+- [x] Crear `src/modules/sisfe/client.ts`: `createSisfeClient(token)` con `buscarExpedientes` y `obtenerExpediente`, tipado y parseado con zod.
+
+Falta todavía: schema de login no se usa aún (no hay endpoint propio que llame a `/login` — eso lo dispara el script de Fase 3). Queda declarado en `schemas.ts` para cuando se conecte.
+
+### Fase 3 — Módulo de autenticación semi-manual (Playwright) ✅ (parcial)
+- [x] Script standalone `scripts/sisfe-login.ts` (`npm run sisfe:login`) que abre Chromium headed.
+- [x] El humano completa matrícula/clave y resuelve el captcha a mano.
+- [x] El script espera la response de `POST /iol/login` (hasta 5 min), extrae `token`, decodifica el `exp` (con `jsonwebtoken`, que ya era dependencia) y lo guarda.
+- [ ] **Pendiente:** hoy lo guarda sin cifrar en `.sisfe-session.json` (gitignored) en la raíz del repo, como placeholder. Cuando exista el modelo `SisfeSession` (Fase 4), reemplazar ese `writeFileSync` por persistencia cifrada en DB.
+
+### Fase 4 — Persistencia (Prisma) ✅ (schema listo, falta migrar)
+- [x] Modelo `SisfeSession` (`tokenCifrado`, `expiresAt`).
+- [x] Modelo `ExpedienteTracked` (`sisfeId` único, `numero`, `caratula`).
+- [x] Modelo `ExpedienteSnapshot` (`ubicacion`, `radicacion`, `actualizadoEn`, relación a `ExpedienteTracked`).
+- [ ] **Pendiente (no lo pude hacer yo, no hay DB conectada en este entorno):** crear el proyecto en **Supabase** (decisión del usuario para la DB de esta fase), tomar su `DATABASE_URL` y correr `npm run prisma:migrate` para generar y aplicar la migración. El schema ya está validado (`prisma validate` y `prisma generate` corrieron OK con una URL descartable).
+- [x] Helper de cifrado del token (`src/modules/sisfe/crypto.ts`, AES-256-GCM). Ya conectado a `scripts/sisfe-login.ts` — el `.sisfe-session.json` local ahora guarda el token cifrado (mismo formato que va a tener la columna `tokenCifrado`), como paso intermedio hasta que exista Supabase y se pueda escribir directo a `SisfeSession`.
+
+### Fase 5 — Scheduler ✅ (código listo, no ejecutable hasta que exista Supabase)
+- [x] `src/modules/sisfe/dates.ts`: parsea las fechas de SISFE (`dd/MM/yyyy HH:mm`) a `Date`.
+- [x] `src/modules/sisfe/scheduler.ts`: `runSchedulerCycle()` recorre `ExpedienteTracked`, pide el detalle con `sisfe-client` usando la sesión vigente (`SisfeSession`, desencriptada), y compara `ubicacion`/`radicacion`/`actualizadoEn` contra el último `ExpedienteSnapshot`. Si cambió, crea un snapshot nuevo y loguea el cambio.
+- [x] `startSisfeScheduler()` registra el ciclo cada 30 minutos con `node-cron`, arrancado desde `src/index.ts` junto con el servidor Express (no hace falta un proceso aparte).
+- [ ] **No implementado a propósito:** el "genera evento/notificación" del plan original hoy es solo un `console.log`/`console.error` — no hay canal de notificación (mail/webhook/etc.) definido todavía. Se agrega cuando se decida cómo se quiere avisar.
+- **No se puede correr end-to-end todavía:** depende de que exista Supabase + migración (Fase 4 pendiente) y de que haya al menos una fila en `SisfeSession` y `ExpedienteTracked` (esto último — cómo se cargan expedientes a trackear — es la Fase 7, todavía no está resuelto quién los inserta).
 
 ### Fase 6 — Manejo de expiración de sesión
 - [ ] Si `sisfe-client` recibe 401, marcar `SisfeSession` como inválida.
