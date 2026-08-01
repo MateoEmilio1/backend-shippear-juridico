@@ -89,6 +89,11 @@ enum SisfeDocumentSource {
   CARGO
 }
 
+enum SisfeDocumentStatus {
+  PENDING
+  AVAILABLE
+}
+
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
@@ -474,6 +479,7 @@ model ExpedienteTracked {
   digital            Boolean              @default(false)
   rawSummary         Json
   rawDetail          Json?
+  documentsScannedAt DateTime?
   firstSeenAt        DateTime              @default(now())
   lastSeenAt         DateTime              @default(now())
   lastSyncedAt       DateTime              @default(now())
@@ -526,14 +532,19 @@ model SisfeDocument {
   expedienteId String
   movementId   String?
   source       SisfeDocumentSource
+  status       SisfeDocumentStatus @default(PENDING)
   externalId   String
   fileName     String
   mimeType     String              @default("application/pdf")
-  byteSize     Int
-  sha256       String
-  content      Bytes
+  byteSize     Int?
+  sha256       String?
+  content      Bytes?
   fecha        DateTime?
   observacion  String?
+  attempts     Int                 @default(0)
+  lastError    String?
+  prioritized  Boolean             @default(false)
+  prioritizedAt DateTime?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
   expediente   ExpedienteTracked  @relation(fields: [expedienteId], references: [id], onDelete: Cascade)
@@ -541,6 +552,7 @@ model SisfeDocument {
 
   @@unique([expedienteId, source, externalId])
   @@index([expedienteId, createdAt])
+  @@index([expedienteId, prioritized, status])
   @@index([movementId])
 }
 

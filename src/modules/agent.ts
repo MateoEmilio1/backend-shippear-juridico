@@ -46,7 +46,7 @@ const agentInclude = {
       movements: { orderBy: { fecha: "desc" as const } },
       documents: {
         orderBy: { fecha: "desc" as const },
-        select: { id: true, movementId: true, source: true, externalId: true, fileName: true, mimeType: true, byteSize: true, sha256: true, fecha: true, observacion: true, createdAt: true, updatedAt: true },
+        select: { id: true, movementId: true, source: true, status: true, externalId: true, fileName: true, mimeType: true, byteSize: true, sha256: true, fecha: true, observacion: true, attempts: true, lastError: true, prioritized: true, prioritizedAt: true, createdAt: true, updatedAt: true },
       },
     },
   },
@@ -60,7 +60,7 @@ const serializeCase = (item: AgentCasePayload) => ({
     ? {
       ...item.sisfeExpediente,
       sisfeId: item.sisfeExpediente.sisfeId.toString(),
-      documents: item.sisfeExpediente.documents.map((document) => ({ ...document, downloadUrl: `/api/agent/documents/${document.id}/download` })),
+      documents: item.sisfeExpediente.documents.map((document) => ({ ...document, downloadUrl: document.status === "AVAILABLE" ? `/api/agent/documents/${document.id}/download` : null })),
     }
     : null,
 });
@@ -112,6 +112,7 @@ export const downloadAgentDocument = async (request: Request, response: Response
     select: { fileName: true, mimeType: true, byteSize: true, content: true },
   });
   if (!document) throw new HttpError(404, "Documento no encontrado");
+  if (!document.content) throw new HttpError(409, "El documento todavía está pendiente de descarga desde SISFE");
   const fallback = document.fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180) || "documento.pdf";
   response.setHeader("Content-Type", document.mimeType);
   response.setHeader("Content-Length", String(document.byteSize));

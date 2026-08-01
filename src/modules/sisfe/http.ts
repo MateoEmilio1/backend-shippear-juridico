@@ -29,6 +29,11 @@ const browserImportSchema = importSchema.extend({ token: z.string().min(40), tic
 const browserImportStartSchema = z.object({
   ticket: z.string().min(40), token: z.string().min(40), totalExpected: z.number().int().min(1).max(500),
 });
+const browserImportPlanSchema = z.object({
+  ticket: z.string().min(40), summaries: z.array(sisfeExpedienteResumenSchema).min(1).max(500),
+});
+const browserImportFinishSchema = z.object({ ticket: z.string().min(40), importId: z.string().uuid() });
+const documentPrioritySchema = z.object({ prioritized: z.boolean() });
 const browserImportBatchSchema = z.object({
   ticket: z.string().min(40), importId: z.string().uuid(), entries: entriesSchema.max(10), isFinal: z.boolean().default(false),
 });
@@ -42,6 +47,20 @@ const browserDocumentHeadersSchema = z.object({
   fileName: z.string().min(1).max(500),
   fecha: z.string().optional(),
   observacion: z.string().max(4000).optional(),
+});
+const browserDocumentManifestSchema = z.object({
+  ticket: z.string().min(40),
+  importId: z.string().uuid(),
+  scannedExpedienteSisfeIds: z.array(z.string().min(1)).max(500).default([]),
+  documents: z.array(z.object({
+    expedienteSisfeId: z.string().min(1),
+    source: z.enum(["ACTUACION", "CARGO"]),
+    externalId: z.string().min(1),
+    movementExternalId: z.string().optional(),
+    fileName: z.string().min(1).max(500),
+    fecha: z.string().optional(),
+    observacion: z.string().max(4000).optional(),
+  })).max(100),
 });
 
 const secureEquals = (received: string, expected: string) => {
@@ -159,16 +178,103 @@ export const importSisfeBrowserDocument = async (request: Request, response: Res
     where: { expedienteId_source_externalId: { expedienteId: expediente.id, source: headers.source, externalId: headers.externalId } },
     create: {
       expedienteId: expediente.id, movementId: movement?.id, source: headers.source, externalId: headers.externalId,
-      fileName: headers.fileName, mimeType, byteSize: rawBody.length, sha256, content,
+      status: "AVAILABLE", fileName: headers.fileName, mimeType, byteSize: rawBody.length, sha256, content,
       fecha: safeDate, observacion: headers.observacion || null,
     },
     update: {
-      movementId: movement?.id, fileName: headers.fileName, mimeType, byteSize: rawBody.length,
-      sha256, content, fecha: safeDate, observacion: headers.observacion || null,
+      movementId: movement?.id, status: "AVAILABLE", fileName: headers.fileName, mimeType, byteSize: rawBody.length,
+      sha256, content, fecha: safeDate, observacion: headers.observacion || null, attempts: { increment: 1 }, lastError: null,
+      prioritized: false, prioritizedAt: null,
     },
-    select: { id: true, fileName: true, byteSize: true, sha256: true },
+    select: { id: true, status: true, fileName: true, byteSize: true, sha256: true },
   });
   response.json({ document });
+};
+
+export const registerSisfeBrowserDocuments = async (request: Request, response: Response) => {
+  const { ticket, importId, documents, scannedExpedienteSisfeIds } = browserDocumentManifestSchema.parse(request.body);
+  const { workspaceId } = verifyConnectTicket(ticket);
+  const run = await prisma.sisfeSyncRun.findFirst({ where: { id: importId, workspaceId }, select: { id: true } });
+  if (!run) throw new HttpError(404, "Importación SISFE no encontrada");
+
+  const sisfeIds = [...new Set([...documents.map((document) => document.expedienteSisfeId), ...scannedExpedienteSisfeIds])].map((value) => {
+    try { return BigInt(value); } catch { throw new HttpError(400, "Identificador de expediente inválido"); }
+  });
+  const expedientes = await prisma.expedienteTracked.findMany({
+    where: { workspaceId, sisfeId: { in: sisfeIds } }, select: { id: true, sisfeId: true },
+  });
+  const expedienteBySisfeId = new Map(expedientes.map((item) => [item.sisfeId.toString(), item.id]));
+  const movementIds = [...new Set(documents.map((item) => item.movementExternalId).filter((value): value is string => Boolean(value)))];
+  const movements = movementIds.length ? await prisma.sisfeMovement.findMany({
+    where: { expedienteId: { in: expedientes.map((item) => item.id) }, sisfeId: { in: movementIds } },
+    select: { id: true, expedienteId: true, sisfeId: true },
+  }) : [];
+  const movementByKey = new Map(movements.map((item) => [`${item.expedienteId}:${item.sisfeId}`, item.id]));
+
+  const operations = documents.map((document) => {
+    const expedienteId = expedienteBySisfeId.get(document.expedienteSisfeId);
+    if (!expedienteId) throw new HttpError(404, `Expediente SISFE ${document.expedienteSisfeId} no encontrado`);
+    const fecha = document.fecha ? new Date(document.fecha) : null;
+    const safeDate = fecha && !Number.isNaN(fecha.getTime()) ? fecha : null;
+    const movementId = document.movementExternalId ? movementByKey.get(`${expedienteId}:${document.movementExternalId}`) : undefined;
+    return prisma.sisfeDocument.upsert({
+      where: { expedienteId_source_externalId: { expedienteId, source: document.source, externalId: document.externalId } },
+      create: {
+        expedienteId, movementId, source: document.source, externalId: document.externalId,
+        fileName: document.fileName, fecha: safeDate, observacion: document.observacion || null,
+      },
+      update: { movementId, fileName: document.fileName, fecha: safeDate, observacion: document.observacion || null },
+      select: { status: true },
+    });
+  });
+  const registered = operations.length ? await prisma.$transaction(operations) : [];
+  if (scannedExpedienteSisfeIds.length) await prisma.expedienteTracked.updateMany({
+    where: { workspaceId, sisfeId: { in: scannedExpedienteSisfeIds.map((value) => BigInt(value)) } },
+    data: { documentsScannedAt: new Date() },
+  });
+  response.json({
+    registered: registered.length,
+    needed: documents.filter((_document, index) => registered[index]?.status !== "AVAILABLE").map((document) => `${document.expedienteSisfeId}:${document.source}:${document.externalId}`),
+  });
+};
+
+export const planSisfeBrowserImport = async (request: Request, response: Response) => {
+  const { ticket, summaries } = browserImportPlanSchema.parse(request.body);
+  const { workspaceId } = verifyConnectTicket(ticket);
+  const ids = summaries.map((summary) => BigInt(summary.id));
+  const [existing, pendingDocuments] = await Promise.all([
+    prisma.expedienteTracked.findMany({
+      where: { workspaceId, sisfeId: { in: ids } },
+      select: { sisfeId: true, rawSummary: true, documentsScannedAt: true },
+    }),
+    prisma.sisfeDocument.findMany({
+      where: { status: "PENDING", expediente: { workspaceId } },
+      orderBy: [{ prioritized: "desc" }, { prioritizedAt: "desc" }, { fecha: "desc" }, { createdAt: "asc" }],
+      select: {
+        source: true, externalId: true, fileName: true, fecha: true, observacion: true, prioritized: true,
+        expediente: { select: { sisfeId: true } }, movement: { select: { sisfeId: true } },
+      },
+    }),
+  ]);
+  const existingById = new Map(existing.map((item) => [item.sisfeId.toString(), item]));
+  const refreshIds = summaries.filter((summary) => {
+    const stored = existingById.get(String(summary.id));
+    if (!stored?.documentsScannedAt) return true;
+    const raw = stored.rawSummary && typeof stored.rawSummary === "object" && !Array.isArray(stored.rawSummary)
+      ? stored.rawSummary as Record<string, unknown> : {};
+    const previousDate = typeof raw.fechaActualizacion === "string" ? raw.fechaActualizacion.trim() : "";
+    const currentDate = summary.fechaActualizacion.trim();
+    return !currentDate || currentDate !== previousDate;
+  }).map((summary) => String(summary.id));
+  response.json({
+    refreshIds,
+    unchangedCount: summaries.length - refreshIds.length,
+    pendingDocuments: pendingDocuments.map((document) => ({
+      expedienteSisfeId: document.expediente.sisfeId.toString(), source: document.source,
+      externalId: document.externalId, movementExternalId: document.movement?.sisfeId ?? undefined,
+      fileName: document.fileName, fecha: document.fecha?.toISOString() ?? "", observacion: document.observacion ?? "", prioritized: document.prioritized,
+    })),
+  });
 };
 
 export const importSisfeBrowserSnapshot = async (request: Request, response: Response) => {
@@ -220,6 +326,20 @@ export const importSisfeBrowserBatch = async (request: Request, response: Respon
       status: updated.errorCount ? "PARTIAL" : "SUCCESS", finishedAt: new Date(),
       errorMessage: updated.errorCount ? `${updated.errorCount} expedientes no pudieron importarse` : null,
     },
+  });
+  response.json({
+    status: updated.status, foundCount: updated.foundCount, syncedCount: updated.syncedCount,
+    changedCount: updated.changedCount, movementCount: updated.movementCount, errorCount: updated.errorCount,
+  });
+};
+
+export const finishSisfeBrowserImport = async (request: Request, response: Response) => {
+  const { ticket, importId } = browserImportFinishSchema.parse(request.body);
+  const { workspaceId } = verifyConnectTicket(ticket);
+  const run = await prisma.sisfeSyncRun.findFirst({ where: { id: importId, workspaceId, status: "RUNNING" } });
+  if (!run) throw new HttpError(404, "La importación ya no está activa");
+  const updated = await prisma.sisfeSyncRun.update({
+    where: { id: importId }, data: { status: run.errorCount ? "PARTIAL" : "SUCCESS", finishedAt: new Date() },
   });
   response.json({
     status: updated.status, foundCount: updated.foundCount, syncedCount: updated.syncedCount,
@@ -290,13 +410,27 @@ export const getSisfeExpediente = async (request: Request, response: Response) =
       snapshots: { orderBy: { createdAt: "desc" } },
       legalCase: { select: { id: true, title: true } },
       documents: {
-        orderBy: [{ fecha: "desc" }, { createdAt: "desc" }],
-        select: { id: true, movementId: true, source: true, externalId: true, fileName: true, mimeType: true, byteSize: true, sha256: true, fecha: true, observacion: true, createdAt: true, updatedAt: true },
+        orderBy: [{ prioritized: "desc" }, { fecha: "desc" }, { createdAt: "desc" }],
+        select: { id: true, movementId: true, source: true, status: true, externalId: true, fileName: true, mimeType: true, byteSize: true, sha256: true, fecha: true, observacion: true, attempts: true, lastError: true, prioritized: true, prioritizedAt: true, createdAt: true, updatedAt: true },
       },
     },
   });
   if (!item) throw new HttpError(404, "Expediente SISFE no encontrado");
   response.json({ item: { ...item, sisfeId: item.sisfeId.toString() } });
+};
+
+export const updateSisfeDocumentPriority = async (request: Request, response: Response) => {
+  const { workspaceId } = (request as AuthenticatedRequest).auth;
+  const { prioritized } = documentPrioritySchema.parse(request.body);
+  const existing = await prisma.sisfeDocument.findFirst({
+    where: { id: String(request.params.id), expediente: { workspaceId } }, select: { id: true },
+  });
+  if (!existing) throw new HttpError(404, "Documento no encontrado");
+  const document = await prisma.sisfeDocument.update({
+    where: { id: existing.id }, data: { prioritized, prioritizedAt: prioritized ? new Date() : null },
+    select: { id: true, prioritized: true, prioritizedAt: true },
+  });
+  response.json({ document });
 };
 
 const contentDisposition = (fileName: string, disposition: "attachment" | "inline") => {
@@ -311,6 +445,7 @@ const sendSisfeDocument = async (request: Request, response: Response, dispositi
     select: { fileName: true, mimeType: true, byteSize: true, content: true },
   });
   if (!document) throw new HttpError(404, "Documento no encontrado");
+  if (!document.content) throw new HttpError(409, "El documento todavía está pendiente de descarga desde SISFE");
   const content = Buffer.from(document.content);
   const range = request.header("range")?.match(/^bytes=(\d*)-(\d*)$/);
   response.setHeader("Content-Type", document.mimeType);

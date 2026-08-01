@@ -11,7 +11,7 @@ import { getDashboard } from "./modules/dashboard.js";
 import { archiveCase, createCase, createNote, createResource, getCase, listCases, updateCase } from "./modules/cases.js";
 import { createEvent, deleteEvent, listEvents, updateEvent } from "./modules/events.js";
 import { startSisfeScheduler } from "./modules/sisfe/scheduler.js";
-import { createSisfeConnectTicket, downloadSisfeDocument, getSisfeExpediente, getSisfeStatus, importSisfeBrowserBatch, importSisfeBrowserDocument, importSisfeBrowserSnapshot, importSisfeSnapshot, listSisfeExpedientes, receiveSisfeSession, startSisfeBrowserImport, triggerSisfeSyncNow, viewSisfeDocument } from "./modules/sisfe/http.js";
+import { createSisfeConnectTicket, downloadSisfeDocument, finishSisfeBrowserImport, getSisfeExpediente, getSisfeStatus, importSisfeBrowserBatch, importSisfeBrowserDocument, importSisfeBrowserSnapshot, importSisfeSnapshot, listSisfeExpedientes, planSisfeBrowserImport, receiveSisfeSession, registerSisfeBrowserDocuments, startSisfeBrowserImport, triggerSisfeSyncNow, updateSisfeDocumentPriority, viewSisfeDocument } from "./modules/sisfe/http.js";
 import { asyncHandler, HttpError } from "./utils/http.js";
 
 const app = express();
@@ -32,8 +32,11 @@ app.post("/api/integrations/sisfe/session", express.json({ limit: "1mb" }), asyn
 app.post("/api/integrations/sisfe/import", express.json({ limit: "20mb" }), asyncHandler(importSisfeSnapshot));
 app.post("/api/integrations/sisfe/browser-import", express.json({ limit: "20mb" }), asyncHandler(importSisfeBrowserSnapshot));
 app.post("/api/integrations/sisfe/browser-import/start", express.json({ limit: "1mb" }), asyncHandler(startSisfeBrowserImport));
+app.post("/api/integrations/sisfe/browser-import/plan", express.json({ limit: "2mb" }), asyncHandler(planSisfeBrowserImport));
 app.post("/api/integrations/sisfe/browser-import/batch", express.json({ limit: "3mb" }), asyncHandler(importSisfeBrowserBatch));
+app.post("/api/integrations/sisfe/browser-import/finish", express.json({ limit: "1mb" }), asyncHandler(finishSisfeBrowserImport));
 app.post("/api/integrations/sisfe/browser-import/document", express.raw({ type: () => true, limit: "30mb" }), asyncHandler(importSisfeBrowserDocument));
+app.post("/api/integrations/sisfe/browser-import/document-manifest", express.json({ limit: "2mb" }), asyncHandler(registerSisfeBrowserDocuments));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_request, response) => response.json({ ok: true, service: "shippear-juridico" }));
@@ -66,6 +69,7 @@ app.get("/api/sisfe/expedientes", asyncHandler(listSisfeExpedientes));
 app.get("/api/sisfe/expedientes/:id", asyncHandler(getSisfeExpediente));
 app.get("/api/sisfe/documents/:id/download", asyncHandler(downloadSisfeDocument));
 app.get("/api/sisfe/documents/:id/view", asyncHandler(viewSisfeDocument));
+app.patch("/api/sisfe/documents/:id/priority", asyncHandler(updateSisfeDocumentPriority));
 
 app.use((_request, response) => response.status(404).json({ error: "Ruta no encontrada" }));
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
