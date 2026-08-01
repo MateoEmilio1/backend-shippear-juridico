@@ -48,6 +48,12 @@ const browserDocumentHeadersSchema = z.object({
   fecha: z.string().optional(),
   observacion: z.string().max(4000).optional(),
 });
+const capturedDocumentHeadersSchema = z.object({
+  ticket: z.string().min(40),
+  source: z.enum(["ACTUACION", "CARGO"]),
+  externalId: z.string().min(1),
+  fileName: z.string().max(500).optional(),
+});
 const browserDocumentManifestSchema = z.object({
   ticket: z.string().min(40),
   importId: z.string().uuid(),
@@ -187,6 +193,38 @@ export const importSisfeBrowserDocument = async (request: Request, response: Res
       prioritized: false, prioritizedAt: null,
     },
     select: { id: true, status: true, fileName: true, byteSize: true, sha256: true },
+  });
+  response.json({ document });
+};
+
+export const captureSisfeBrowserDocument = async (request: Request, response: Response) => {
+  const headers = capturedDocumentHeadersSchema.parse({
+    ticket: request.header("x-sisfe-ticket"),
+    source: request.header("x-document-source"),
+    externalId: request.header("x-document-external-id"),
+    fileName: decodedHeader(request, "x-file-name"),
+  });
+  const { workspaceId } = verifyConnectTicket(headers.ticket);
+  if (!Buffer.isBuffer(request.body) || !request.body.length) throw new HttpError(400, "El documento está vacío");
+  const matches = await prisma.sisfeDocument.findMany({
+    where: { source: headers.source, externalId: headers.externalId, expediente: { workspaceId } },
+    take: 2,
+    select: { id: true, fileName: true },
+  });
+  if (!matches.length) throw new HttpError(404, "El documento todavía no está registrado en la cola");
+  if (matches.length > 1) throw new HttpError(409, "El identificador del documento no es único en SISFE");
+  const rawBody = request.body as Buffer;
+  const content = Uint8Array.from(rawBody);
+  const mimeType = ((request.header("content-type") || "application/pdf").split(";")[0] ?? "application/pdf").slice(0, 200);
+  const sha256 = createHash("sha256").update(rawBody).digest("hex");
+  const document = await prisma.sisfeDocument.update({
+    where: { id: matches[0]!.id },
+    data: {
+      status: "AVAILABLE", fileName: headers.fileName || matches[0]!.fileName, mimeType,
+      byteSize: rawBody.length, sha256, content, attempts: { increment: 1 }, lastError: null,
+      prioritized: false, prioritizedAt: null,
+    },
+    select: { id: true, fileName: true, byteSize: true, status: true, expedienteId: true },
   });
   response.json({ document });
 };
@@ -398,6 +436,52 @@ export const listSisfeExpedientes = async (request: Request, response: Response)
     total,
     page: query.page,
     pages: Math.max(1, Math.ceil(total / pageSize)),
+  });
+};
+
+export const listSisfeDocumentQueue = async (request: Request, response: Response) => {
+  const { workspaceId } = (request as AuthenticatedRequest).auth;
+  const query = z.object({
+    q: z.string().trim().optional(),
+    filter: z.enum(["ALL", "PENDING", "AVAILABLE", "ERROR"]).default("ALL"),
+    page: z.coerce.number().int().min(1).default(1),
+  }).parse(request.query);
+  const pageSize = 30;
+  const workspaceWhere = { expediente: { workspaceId } };
+  const stateWhere = query.filter === "ERROR"
+    ? { status: "PENDING" as const, lastError: { not: null } }
+    : query.filter === "ALL" ? {} : { status: query.filter };
+  const searchWhere = query.q ? {
+    OR: [
+      { fileName: { contains: query.q, mode: "insensitive" as const } },
+      { expediente: { cuij: { contains: query.q, mode: "insensitive" as const } } },
+      { expediente: { numero: { contains: query.q, mode: "insensitive" as const } } },
+      { expediente: { caratula: { contains: query.q, mode: "insensitive" as const } } },
+    ],
+  } : {};
+  const where = { ...workspaceWhere, ...stateWhere, ...searchWhere };
+  const [items, filteredTotal, total, available, pending, errors, prioritized] = await Promise.all([
+    prisma.sisfeDocument.findMany({
+      where,
+      orderBy: [{ prioritized: "desc" }, { updatedAt: "desc" }],
+      skip: (query.page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true, source: true, status: true, externalId: true, fileName: true, mimeType: true,
+        byteSize: true, attempts: true, lastError: true, prioritized: true, createdAt: true, updatedAt: true,
+        expediente: { select: { id: true, cuij: true, numero: true, caratula: true } },
+      },
+    }),
+    prisma.sisfeDocument.count({ where }),
+    prisma.sisfeDocument.count({ where: workspaceWhere }),
+    prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "AVAILABLE" } }),
+    prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING" } }),
+    prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING", lastError: { not: null } } }),
+    prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING", prioritized: true } }),
+  ]);
+  response.json({
+    items, total: filteredTotal, page: query.page, pages: Math.max(1, Math.ceil(filteredTotal / pageSize)),
+    stats: { total, available, pending, errors, prioritized, percentage: total ? Math.round((available / total) * 100) : 0 },
   });
 };
 

@@ -11,7 +11,7 @@ import { getDashboard } from "./modules/dashboard.js";
 import { archiveCase, createCase, createNote, createResource, getCase, listCases, updateCase } from "./modules/cases.js";
 import { createEvent, deleteEvent, listEvents, updateEvent } from "./modules/events.js";
 import { startSisfeScheduler } from "./modules/sisfe/scheduler.js";
-import { createSisfeConnectTicket, downloadSisfeDocument, finishSisfeBrowserImport, getSisfeExpediente, getSisfeStatus, importSisfeBrowserBatch, importSisfeBrowserDocument, importSisfeBrowserSnapshot, importSisfeSnapshot, listSisfeExpedientes, planSisfeBrowserImport, receiveSisfeSession, registerSisfeBrowserDocuments, startSisfeBrowserImport, triggerSisfeSyncNow, updateSisfeDocumentPriority, viewSisfeDocument } from "./modules/sisfe/http.js";
+import { captureSisfeBrowserDocument, createSisfeConnectTicket, downloadSisfeDocument, finishSisfeBrowserImport, getSisfeExpediente, getSisfeStatus, importSisfeBrowserBatch, importSisfeBrowserDocument, importSisfeBrowserSnapshot, importSisfeSnapshot, listSisfeDocumentQueue, listSisfeExpedientes, planSisfeBrowserImport, receiveSisfeSession, registerSisfeBrowserDocuments, startSisfeBrowserImport, triggerSisfeSyncNow, updateSisfeDocumentPriority, viewSisfeDocument } from "./modules/sisfe/http.js";
 import { asyncHandler, HttpError } from "./utils/http.js";
 
 const app = express();
@@ -20,7 +20,7 @@ app.set("trust proxy", 1);
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || origin.startsWith("chrome-extension://") || config.frontendUrls.includes(origin.replace(/\/$/, ""))) return callback(null, true);
+      if (!origin || origin === "https://sisfe.justiciasantafe.gov.ar" || origin.startsWith("chrome-extension://") || config.frontendUrls.includes(origin.replace(/\/$/, ""))) return callback(null, true);
       callback(new Error("Origen no permitido por CORS"));
     },
     credentials: true,
@@ -36,6 +36,7 @@ app.post("/api/integrations/sisfe/browser-import/plan", express.json({ limit: "2
 app.post("/api/integrations/sisfe/browser-import/batch", express.json({ limit: "3mb" }), asyncHandler(importSisfeBrowserBatch));
 app.post("/api/integrations/sisfe/browser-import/finish", express.json({ limit: "1mb" }), asyncHandler(finishSisfeBrowserImport));
 app.post("/api/integrations/sisfe/browser-import/document", express.raw({ type: () => true, limit: "30mb" }), asyncHandler(importSisfeBrowserDocument));
+app.post("/api/integrations/sisfe/browser-capture/document", express.raw({ type: () => true, limit: "30mb" }), asyncHandler(captureSisfeBrowserDocument));
 app.post("/api/integrations/sisfe/browser-import/document-manifest", express.json({ limit: "2mb" }), asyncHandler(registerSisfeBrowserDocuments));
 app.use(express.json({ limit: "1mb" }));
 
@@ -66,6 +67,7 @@ app.get("/api/sisfe/status", asyncHandler(getSisfeStatus));
 app.post("/api/sisfe/connect-ticket", asyncHandler(createSisfeConnectTicket));
 app.post("/api/sisfe/sync", asyncHandler(triggerSisfeSyncNow));
 app.get("/api/sisfe/expedientes", asyncHandler(listSisfeExpedientes));
+app.get("/api/sisfe/documents", asyncHandler(listSisfeDocumentQueue));
 app.get("/api/sisfe/expedientes/:id", asyncHandler(getSisfeExpediente));
 app.get("/api/sisfe/documents/:id/download", asyncHandler(downloadSisfeDocument));
 app.get("/api/sisfe/documents/:id/view", asyncHandler(viewSisfeDocument));
