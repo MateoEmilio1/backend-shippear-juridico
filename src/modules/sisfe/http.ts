@@ -226,7 +226,26 @@ export const captureSisfeBrowserDocument = async (request: Request, response: Re
     },
     select: { id: true, fileName: true, byteSize: true, status: true, expedienteId: true },
   });
-  response.json({ document });
+  const nextDocument = await prisma.sisfeDocument.findFirst({
+    where: { status: "PENDING", expediente: { workspaceId } },
+    orderBy: [{ prioritized: "desc" }, { updatedAt: "desc" }],
+    select: {
+      source: true, externalId: true,
+      movement: { select: { sisfeId: true } },
+      expediente: { select: { sisfeId: true } },
+    },
+  });
+  const nextUrl = nextDocument ? (() => {
+    const path = nextDocument.source === "CARGO" && nextDocument.movement?.sisfeId
+      ? `/documentos-adjuntos/${encodeURIComponent(nextDocument.movement.sisfeId)}/${nextDocument.expediente.sisfeId}`
+      : `/detalle-expediente/${nextDocument.expediente.sisfeId}`;
+    const params = new URLSearchParams({
+      roxium_autodownload: "1", roxium_autorun: "1", roxium_source: nextDocument.source,
+      roxium_external_id: nextDocument.externalId,
+    });
+    return `https://sisfe.justiciasantafe.gov.ar${path}?${params}`;
+  })() : null;
+  response.json({ document, nextUrl });
 };
 
 export const registerSisfeBrowserDocuments = async (request: Request, response: Response) => {
@@ -460,17 +479,24 @@ export const listSisfeDocumentQueue = async (request: Request, response: Respons
     ],
   } : {};
   const where = { ...workspaceWhere, ...stateWhere, ...searchWhere };
-  const [items, filteredTotal, total, available, pending, errors, prioritized] = await Promise.all([
+  const documentSelect = {
+    id: true, source: true, status: true, externalId: true, fileName: true, mimeType: true,
+    byteSize: true, attempts: true, lastError: true, prioritized: true, createdAt: true, updatedAt: true,
+    expediente: { select: { id: true, sisfeId: true, cuij: true, numero: true, caratula: true } },
+    movement: { select: { sisfeId: true } },
+  } as const;
+  const [items, nextPending, filteredTotal, total, available, pending, errors, prioritized] = await Promise.all([
     prisma.sisfeDocument.findMany({
       where,
       orderBy: [{ prioritized: "desc" }, { updatedAt: "desc" }],
       skip: (query.page - 1) * pageSize,
       take: pageSize,
-      select: {
-        id: true, source: true, status: true, externalId: true, fileName: true, mimeType: true,
-        byteSize: true, attempts: true, lastError: true, prioritized: true, createdAt: true, updatedAt: true,
-        expediente: { select: { id: true, cuij: true, numero: true, caratula: true } },
-      },
+      select: documentSelect,
+    }),
+    prisma.sisfeDocument.findFirst({
+      where: { ...workspaceWhere, status: "PENDING" },
+      orderBy: [{ prioritized: "desc" }, { updatedAt: "desc" }],
+      select: documentSelect,
     }),
     prisma.sisfeDocument.count({ where }),
     prisma.sisfeDocument.count({ where: workspaceWhere }),
@@ -479,8 +505,12 @@ export const listSisfeDocumentQueue = async (request: Request, response: Respons
     prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING", lastError: { not: null } } }),
     prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING", prioritized: true } }),
   ]);
+  const serializeDocument = <T extends { expediente: { sisfeId: bigint } }>(document: T) => ({
+    ...document, expediente: { ...document.expediente, sisfeId: document.expediente.sisfeId.toString() },
+  });
   response.json({
-    items, total: filteredTotal, page: query.page, pages: Math.max(1, Math.ceil(filteredTotal / pageSize)),
+    items: items.map(serializeDocument), nextPending: nextPending ? serializeDocument(nextPending) : null,
+    total: filteredTotal, page: query.page, pages: Math.max(1, Math.ceil(filteredTotal / pageSize)),
     stats: { total, available, pending, errors, prioritized, percentage: total ? Math.round((available / total) * 100) : 0 },
   });
 };
