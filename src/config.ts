@@ -30,4 +30,7 @@ export const config = {
   sisfeWorkspaceSlug: process.env.SISFE_WORKSPACE_SLUG?.trim() || "antenucci-penal",
   sisfeConnectSecret: process.env.SISFE_CONNECT_SECRET?.trim() || "",
   sisfeAlertWebhookUrl: process.env.SISFE_ALERT_WEBHOOK_URL?.trim() || "",
+  agentApiEnabled: process.env.AGENT_API_ENABLED === "true",
+  agentApiKey: process.env.AGENT_API_KEY?.trim() || "",
+  agentWorkspaceSlug: process.env.AGENT_WORKSPACE_SLUG?.trim() || process.env.SISFE_WORKSPACE_SLUG?.trim() || "antenucci-penal",
 };

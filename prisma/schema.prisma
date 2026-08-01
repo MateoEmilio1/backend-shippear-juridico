@@ -84,6 +84,11 @@ enum SisfeSyncStatus {
   NEEDS_LOGIN
 }
 
+enum SisfeDocumentSource {
+  ACTUACION
+  CARGO
+}
+
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
@@ -478,6 +483,7 @@ model ExpedienteTracked {
   legalCase          LegalCase?           @relation(fields: [legalCaseId], references: [id], onDelete: SetNull)
   snapshots          ExpedienteSnapshot[]
   movements          SisfeMovement[]
+  documents          SisfeDocument[]
 
   @@unique([workspaceId, sisfeId])
   @@index([workspaceId, lastSeenAt])
@@ -509,9 +515,33 @@ model SisfeMovement {
   firstSeenAt  DateTime          @default(now())
   lastSeenAt   DateTime          @default(now())
   expediente   ExpedienteTracked @relation(fields: [expedienteId], references: [id], onDelete: Cascade)
+  documents    SisfeDocument[]
 
   @@unique([expedienteId, fingerprint])
   @@index([expedienteId, fecha])
+}
+
+model SisfeDocument {
+  id           String              @id @default(uuid())
+  expedienteId String
+  movementId   String?
+  source       SisfeDocumentSource
+  externalId   String
+  fileName     String
+  mimeType     String              @default("application/pdf")
+  byteSize     Int
+  sha256       String
+  content      Bytes
+  fecha        DateTime?
+  observacion  String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  expediente   ExpedienteTracked  @relation(fields: [expedienteId], references: [id], onDelete: Cascade)
+  movement     SisfeMovement?      @relation(fields: [movementId], references: [id], onDelete: SetNull)
+
+  @@unique([expedienteId, source, externalId])
+  @@index([expedienteId, createdAt])
+  @@index([movementId])
 }
 
 model SisfeSyncRun {
