@@ -513,7 +513,7 @@ export const listSisfeDocumentQueue = async (request: Request, response: Respons
     expediente: { select: { id: true, sisfeId: true, cuij: true, numero: true, caratula: true } },
     movement: { select: { sisfeId: true } },
   } as const;
-  const [items, nextPending, filteredTotal, total, available, pending, errors, prioritized] = await Promise.all([
+  const [items, nextPending, filteredTotal, total, available, pending, errors, prioritized, storedSize] = await Promise.all([
     prisma.sisfeDocument.findMany({
       where,
       orderBy: [{ prioritized: "desc" }, { updatedAt: "desc" }],
@@ -532,14 +532,21 @@ export const listSisfeDocumentQueue = async (request: Request, response: Respons
     prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING" } }),
     prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING", lastError: { not: null } } }),
     prisma.sisfeDocument.count({ where: { ...workspaceWhere, status: "PENDING", prioritized: true } }),
+    prisma.sisfeDocument.aggregate({ where: { ...workspaceWhere, status: "AVAILABLE" }, _sum: { byteSize: true } }),
   ]);
   const serializeDocument = <T extends { expediente: { sisfeId: bigint } }>(document: T) => ({
     ...document, expediente: { ...document.expediente, sisfeId: document.expediente.sisfeId.toString() },
   });
+  const storedBytes = storedSize._sum.byteSize ?? 0;
+  const averageBytes = available ? Math.round(storedBytes / available) : 0;
   response.json({
     items: items.map(serializeDocument), nextPending: nextPending ? serializeDocument(nextPending) : null,
     total: filteredTotal, page: query.page, pages: Math.max(1, Math.ceil(filteredTotal / pageSize)),
-    stats: { total, available, pending, errors, prioritized, percentage: total ? Math.round((available / total) * 100) : 0 },
+    stats: {
+      total, available, pending, errors, prioritized,
+      percentage: total ? Math.round((available / total) * 100) : 0,
+      storedBytes, averageBytes, estimatedTotalBytes: averageBytes * total,
+    },
   });
 };
 
