@@ -11,7 +11,7 @@ import { getDashboard } from "./modules/dashboard.js";
 import { archiveCase, createCase, createNote, createResource, getCase, listCases, updateCase } from "./modules/cases.js";
 import { createEvent, deleteEvent, listEvents, updateEvent } from "./modules/events.js";
 import { startSisfeScheduler } from "./modules/sisfe/scheduler.js";
-import { captureSisfeBrowserDocument, createSisfeConnectTicket, downloadSisfeDocument, finishSisfeBrowserImport, getSisfeExpediente, getSisfeStatus, importSisfeBrowserBatch, importSisfeBrowserDocument, importSisfeBrowserSnapshot, importSisfeSnapshot, listSisfeDocumentQueue, listSisfeExpedientes, planSisfeBrowserImport, receiveSisfeSession, registerSisfeBrowserDocuments, startSisfeBrowserImport, triggerSisfeSyncNow, updateSisfeDocumentPriority, viewSisfeDocument } from "./modules/sisfe/http.js";
+import { captureSisfeBrowserDocument, createSisfeConnectTicket, downloadSisfeDocument, finishSisfeBrowserImport, getSisfeExpediente, getSisfeStatus, importSisfeBrowserBatch, importSisfeBrowserDocument, importSisfeBrowserSnapshot, importSisfeSnapshot, listSisfeDocumentQueue, listSisfeExpedientes, planSisfeBrowserImport, receiveSisfeSession, registerSisfeBrowserDocuments, reportSisfeBrowserDocumentFailure, startSisfeBrowserImport, triggerSisfeSyncNow, updateSisfeDocumentPriority, viewSisfeDocument } from "./modules/sisfe/http.js";
 import { asyncHandler, HttpError } from "./utils/http.js";
 
 const app = express();
@@ -37,6 +37,7 @@ app.post("/api/integrations/sisfe/browser-import/batch", express.json({ limit: "
 app.post("/api/integrations/sisfe/browser-import/finish", express.json({ limit: "1mb" }), asyncHandler(finishSisfeBrowserImport));
 app.post("/api/integrations/sisfe/browser-import/document", express.raw({ type: () => true, limit: "30mb" }), asyncHandler(importSisfeBrowserDocument));
 app.post("/api/integrations/sisfe/browser-capture/document", express.raw({ type: () => true, limit: "30mb" }), asyncHandler(captureSisfeBrowserDocument));
+app.post("/api/integrations/sisfe/browser-capture/document-failure", express.json({ limit: "10kb" }), asyncHandler(reportSisfeBrowserDocumentFailure));
 app.post("/api/integrations/sisfe/browser-import/document-manifest", express.json({ limit: "2mb" }), asyncHandler(registerSisfeBrowserDocuments));
 app.use(express.json({ limit: "1mb" }));
 

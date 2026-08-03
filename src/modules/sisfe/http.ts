@@ -54,6 +54,12 @@ const capturedDocumentHeadersSchema = z.object({
   externalId: z.string().min(1),
   fileName: z.string().max(500).optional(),
 });
+const capturedDocumentFailureSchema = z.object({
+  ticket: z.string().min(40),
+  source: z.enum(["ACTUACION", "CARGO"]),
+  externalId: z.string().min(1),
+  errorMessage: z.string().trim().min(1).max(1000),
+});
 const browserDocumentManifestSchema = z.object({
   ticket: z.string().min(40),
   importId: z.string().uuid(),
@@ -148,6 +154,27 @@ const decodedHeader = (request: Request, name: string) => {
   try { return decodeURIComponent(value); } catch { throw new HttpError(400, `Cabecera ${name} inválida`); }
 };
 
+const nextQueuedDocumentUrl = async (workspaceId: string, excludeId?: string) => {
+  const nextDocument = await prisma.sisfeDocument.findFirst({
+    where: { status: "PENDING", lastError: null, expediente: { workspaceId }, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    orderBy: [{ prioritized: "desc" }, { updatedAt: "desc" }],
+    select: {
+      source: true, externalId: true,
+      movement: { select: { sisfeId: true } },
+      expediente: { select: { sisfeId: true } },
+    },
+  });
+  if (!nextDocument) return null;
+  const path = nextDocument.source === "CARGO" && nextDocument.movement?.sisfeId
+    ? `/documentos-adjuntos/${encodeURIComponent(nextDocument.movement.sisfeId)}/${nextDocument.expediente.sisfeId}`
+    : `/detalle-expediente/${nextDocument.expediente.sisfeId}`;
+  const params = new URLSearchParams({
+    roxium_autodownload: "1", roxium_autorun: "1", roxium_source: nextDocument.source,
+    roxium_external_id: nextDocument.externalId,
+  });
+  return `https://sisfe.justiciasantafe.gov.ar${path}?${params}`;
+};
+
 export const importSisfeBrowserDocument = async (request: Request, response: Response) => {
   const headers = browserDocumentHeadersSchema.parse({
     ticket: request.header("x-sisfe-ticket"),
@@ -226,26 +253,27 @@ export const captureSisfeBrowserDocument = async (request: Request, response: Re
     },
     select: { id: true, fileName: true, byteSize: true, status: true, expedienteId: true },
   });
-  const nextDocument = await prisma.sisfeDocument.findFirst({
-    where: { status: "PENDING", expediente: { workspaceId } },
-    orderBy: [{ prioritized: "desc" }, { updatedAt: "desc" }],
-    select: {
-      source: true, externalId: true,
-      movement: { select: { sisfeId: true } },
-      expediente: { select: { sisfeId: true } },
-    },
-  });
-  const nextUrl = nextDocument ? (() => {
-    const path = nextDocument.source === "CARGO" && nextDocument.movement?.sisfeId
-      ? `/documentos-adjuntos/${encodeURIComponent(nextDocument.movement.sisfeId)}/${nextDocument.expediente.sisfeId}`
-      : `/detalle-expediente/${nextDocument.expediente.sisfeId}`;
-    const params = new URLSearchParams({
-      roxium_autodownload: "1", roxium_autorun: "1", roxium_source: nextDocument.source,
-      roxium_external_id: nextDocument.externalId,
-    });
-    return `https://sisfe.justiciasantafe.gov.ar${path}?${params}`;
-  })() : null;
+  const nextUrl = await nextQueuedDocumentUrl(workspaceId, document.id);
   response.json({ document, nextUrl });
+};
+
+export const reportSisfeBrowserDocumentFailure = async (request: Request, response: Response) => {
+  const body = capturedDocumentFailureSchema.parse(request.body);
+  const { workspaceId } = verifyConnectTicket(body.ticket);
+  const matches = await prisma.sisfeDocument.findMany({
+    where: { source: body.source, externalId: body.externalId, expediente: { workspaceId } },
+    take: 2,
+    select: { id: true, status: true },
+  });
+  if (!matches.length) throw new HttpError(404, "El documento todavía no está registrado en la cola");
+  if (matches.length > 1) throw new HttpError(409, "El identificador del documento no es único en SISFE");
+  const current = matches[0]!;
+  if (current.status === "PENDING") await prisma.sisfeDocument.update({
+    where: { id: current.id },
+    data: { lastError: body.errorMessage, attempts: { increment: 1 }, prioritized: false, prioritizedAt: null },
+  });
+  const nextUrl = await nextQueuedDocumentUrl(workspaceId, current.id);
+  response.json({ recorded: current.status === "PENDING", nextUrl });
 };
 
 export const registerSisfeBrowserDocuments = async (request: Request, response: Response) => {
